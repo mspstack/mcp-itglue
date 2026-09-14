@@ -1,6 +1,6 @@
 {
   "name": "mcp-itglue",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "mcpName": "io.github.mspstack/mcp-itglue",
   "description": "MCP server for the IT Glue API — documents, flexible assets, semantic vector search, role-based access control, and bring-your-own-key support",
   "type": "module",

@@ -17,6 +17,7 @@ import { registerOrganizationTools } from "./tools/organizations.js";
 import { registerDocumentTools } from "./tools/documents.js";
 import { registerDocumentSectionTools } from "./tools/document-sections.js";
 import { registerAttachmentTools } from "./tools/attachments.js";
+import { registerDocumentImageTools } from "./tools/document-images.js";
 import { registerFlexibleAssetTools } from "./tools/flexible-assets.js";
 import { registerVectorSearchTools } from "./tools/vector-search.js";
 import { registerAdvancedTools } from "./tools/advanced.js";
@@ -82,6 +83,7 @@ export function createServer(config: ServerConfig, session: SessionIdentity): Mc
   registerOrganizationTools(reg, client);
   registerDocumentTools(reg, client, vectorDeps);
   registerDocumentSectionTools(reg, client, vectorDeps);
+  registerDocumentImageTools(reg, client, config.transport, vectorDeps);
   registerAttachmentTools(reg, client, config.transport);
   registerFlexibleAssetTools(reg, client);
   if (vectorDeps) {

@@ -111,6 +111,41 @@ export const ITGLUE_ENDPOINTS: EndpointDoc[] = [
   },
   {
     module: "documents",
+    path: "/document_images",
+    methods: "POST",
+    summary:
+      "Upload an image INTO a document (base64 JSON body). target {type: 'document', id} = inline image — the " +
+      "response's inline_resource_url is the <img src> to use in Text/Step section HTML; target {type: 'gallery', id} " +
+      "files it into a Gallery/Step section's gallery (its document_gallery_id).",
+    coveredBy: "itglue_create_document_image",
+    notes:
+      "Write-only — not reachable via itglue_get. Distinct from attachments, which never render in the document body. " +
+      "Nested keys are spelled as documented: image.file-name.",
+  },
+  {
+    module: "documents",
+    path: "/document_images/{id}",
+    methods: "GET, DELETE",
+    summary: "One document image: name, size, owning document/gallery, target, inline_resource_url, presigned S3 URLs (~1 h).",
+    coveredBy: "itglue_get_document_image, itglue_delete_document_image",
+    commonFields:
+      "name, size, document_id, document_gallery_id, target, inline_resource_url, original_src, slim_src, thumbnail_src",
+  },
+  {
+    module: "documents",
+    path: "/documents/{document_id}/relationships/sections",
+    methods: "GET, POST",
+    summary:
+      "Sections of one document (Document::Text / Heading / Gallery / Step). Text/Step carry content (raw HTML with " +
+      "relative inline-image paths — use for editing) and rendered_content (presigned S3 image URLs — display only); " +
+      "Gallery/Step carry document_gallery_id and a nested document_images array.",
+    coveredBy: "itglue_list_document_sections, itglue_get_document_section, itglue_create_document_section",
+    keyParams: "filter[resource_type], sort=sort",
+    commonFields: "resource_type, content, rendered_content, level, duration, sort, document_gallery_id, document_images",
+    notes: "/{id} supports GET, PATCH, DELETE (itglue_get/update/delete_document_section).",
+  },
+  {
+    module: "documents",
     path: "/organizations/{organization_id}/relationships/documents",
     methods: "GET",
     summary: "Documents of one organization (knowledge-base articles).",

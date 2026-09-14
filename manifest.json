@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "mcp-itglue",
   "display_name": "IT Glue",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "IT Glue for MSPs — documents, flexible assets, and semantic search over your documentation",
   "long_description": "MCP server for the IT Glue API. Browse organizations, read and write documents and flexible assets, and (with an OpenAI API key) run semantic vector search over your documentation — \"how do I remove a backup agent\" finds the right runbook even when the words don't match.",
   "author": {

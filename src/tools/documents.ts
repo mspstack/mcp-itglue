@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { ToolRegistrar } from "../auth/roles.js";
 import { buildQuery, bulkDeletePayload, type ITGlueClient } from "../itglue/client.js";
 import type { Document, DocumentFolder, DocumentSection } from "../itglue/types.js";
-import { clip, htmlToText, pageFooter, sectionKind } from "../format.js";
+import { clip, galleryLines, htmlToText, pageFooter, sectionKind } from "../format.js";
 import { queueDocumentRefresh, type IndexerDeps } from "../vector/indexer.js";
 import {
   emptyPageData,
@@ -264,8 +264,9 @@ export function registerDocumentTools(
       title: "Get IT Glue Document",
       description:
         "Get a document by ID with all of its sections and their content. Section content is stored as HTML; " +
-        "markdown output converts it to plain text. If the response is truncated, fetch individual sections " +
-        "with itglue_get_document_section.",
+        "markdown output converts it to plain text, with inline images shown as their relative " +
+        "/org/docs/doc/images/ID paths and gallery images listed by ID. If the response is truncated, fetch " +
+        "individual sections with itglue_get_document_section.",
       inputSchema: {
         document_id: z.number().int().positive().describe("The document ID"),
         response_format: responseFormatField,
@@ -301,6 +302,7 @@ export function registerDocumentTools(
             lines.push(`### ${sectionKind(section.resource_type)} (ID: ${section.id}, position: ${section.sort ?? "—"})`);
             if (section.level != null) lines.push(`**Level**: ${section.level}`);
             lines.push(section.content ? htmlToText(section.content) : "*No content*");
+            lines.push(...galleryLines(section));
             lines.push("");
           }
         }

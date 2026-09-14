@@ -3,7 +3,7 @@
   "name": "io.github.mspstack/mcp-itglue",
   "title": "IT Glue",
   "description": "IT Glue MCP server for MSPs — documents, flexible assets, semantic vector search, RBAC, and BYOK",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "repository": {
     "url": "https://github.com/mspstack/mcp-itglue",
     "source": "github"
@@ -14,7 +14,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "mcp-itglue",
-      "version": "0.4.1",
+      "version": "0.5.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
