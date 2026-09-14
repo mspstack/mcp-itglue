@@ -66,6 +66,45 @@ export function pageFooter(totalCount: number, pageNumber: number, hasMore: bool
   return lines.join("\n");
 }
 
+/** Minimal shape of a Gallery/Step section's gallery info (see DocumentSection). */
+export interface GallerySectionLike {
+  document_gallery_id?: number | null;
+  document_images?: Array<{ id: string; attributes?: Record<string, unknown> }> | null;
+}
+
+/** Compact image records (id, name, size) from a section's nested document-images. */
+export function galleryImages(
+  section: GallerySectionLike
+): Array<{ id: string; name: string; size?: number }> {
+  return (section.document_images ?? []).map((img) => {
+    const attrs = img.attributes ?? {};
+    const size = attrs.size;
+    return {
+      id: img.id,
+      name: String(attrs.name ?? "(unnamed)"),
+      ...(typeof size === "number" ? { size } : {}),
+    };
+  });
+}
+
+/** Markdown lines describing a Gallery/Step section's gallery id and images; empty for other sections. */
+export function galleryLines(section: GallerySectionLike): string[] {
+  const lines: string[] = [];
+  if (section.document_gallery_id != null) {
+    lines.push(
+      `- **Gallery ID**: ${section.document_gallery_id} (pass as gallery_id to itglue_create_document_image)`
+    );
+  }
+  const images = galleryImages(section);
+  if (images.length > 0) {
+    lines.push(`- **Images** (${images.length}):`);
+    for (const img of images) {
+      lines.push(`  - ${img.name} (image ID: ${img.id}${img.size !== undefined ? `, ${img.size} bytes` : ""})`);
+    }
+  }
+  return lines;
+}
+
 /** "Document::Heading" → "Heading" */
 export function sectionKind(resourceType: string | null | undefined): string {
   if (!resourceType) return "Unknown";

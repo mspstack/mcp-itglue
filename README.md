@@ -7,7 +7,8 @@ An MCP ([Model Context Protocol](https://modelcontextprotocol.io)) server for th
 
 - **Documents & sections** — list, read, create, update, publish, delete
 - **Flexible assets** — browse asset types and their fields, list/read/create/update/delete assets
-- **Attachments & images** — attach an image/file to any record from base64, a URL, or a local path; list and delete attachments
+- **Images inside documents** — upload a picture into a document (inline in a Text/Step section, or into a Gallery) from base64, a URL, or a local path, and embed it with the returned `<img src>`; get and delete document images
+- **Attachments** — attach any file to a record's Attachments panel (documents, flexible assets, configurations, …); list and delete attachments
 - **Semantic vector search** — "how do I remove a backup agent" finds the Veeam decommissioning runbook, even when the words don't match (OpenAI or Azure OpenAI embeddings, local JSON index)
 - **Role-based access control** — viewer / editor / admin bearer tokens decide which tools each session can even see
 - **Bring your own key** — clients may supply their own IT Glue API key per session, so IT Glue's own permissions apply
@@ -145,11 +146,14 @@ With BYOK enabled the server-wide `ITGLUE_API_KEY` becomes optional: sessions wi
 | `itglue_list_document_sections`, `itglue_get_document_section` | read |
 | `itglue_list_flexible_asset_types`, `itglue_get_flexible_asset_type` | read |
 | `itglue_list_flexible_assets`, `itglue_get_flexible_asset` | read |
+| `itglue_get_document_image` | read |
 | `itglue_list_attachments` | read |
 | `itglue_vector_search`, `itglue_vector_index_status` | read |
 | `itglue_create_document`, `itglue_update_document`, `itglue_publish_document` | write |
 | `itglue_create_document_section`, `itglue_update_document_section` | write |
 | `itglue_delete_document_section` † | write |
+| `itglue_create_document_image` | write |
+| `itglue_delete_document_image` † | write |
 | `itglue_create_flexible_asset`, `itglue_update_flexible_asset` | write |
 | `itglue_create_attachment` | write |
 | `itglue_build_vector_index` | write |
@@ -159,7 +163,16 @@ With BYOK enabled the server-wide `ITGLUE_API_KEY` becomes optional: sessions wi
 | `itglue_find_endpoint`, `itglue_get` ‡ | read |
 
 Viewer = read. Editor = read + write. Admin = everything.
-† Permanent, but editor-tier: editors need it to restructure documents and can already blank section content via update.
+† Permanent, but editor-tier: editors need these to restructure documents and can already blank section content (or edit an `<img>` out of it) via update.
+
+### Images in documents vs. attachments
+
+IT Glue has two unrelated upload paths. **Attachments** (`itglue_create_attachment`) land in a record's Attachments side panel and never render in a document's body. To show a picture *inside* a document, use `itglue_create_document_image`:
+
+1. Upload with `document_id` (inline) or `document_id` + `gallery_id` (the `document_gallery_id` of a Gallery/Step section).
+2. For inline images, put the returned `inline_resource_url` verbatim into the section HTML: `<img src="/6255696/docs/17772862/images/27211966">` — or pass `append_to_section_id` and the tool appends it to an existing Text/Step section for you.
+
+IT Glue strips `data:` URIs and its own S3 URLs from section content; only these relative paths (and public `https://` links) survive.
 ‡ Advanced toolset (opt-in, off by default): `itglue_get` is a read-only GET passthrough for any API path the curated tools don't wrap, and `itglue_find_endpoint` searches a curated endpoint catalog. Enable with `ITGLUE_ADVANCED_TOOLSET=true` or `--advanced`. Password resources (`/passwords`) are hard-blocked — credential values never reach the model.
 
 Vector tools appear only when an embedding provider is configured.

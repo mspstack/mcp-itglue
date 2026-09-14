@@ -84,6 +84,33 @@ export interface DocumentSection extends Record<string, unknown> {
   level?: number | null;
   duration?: number | null;
   sort?: number | null;
+  /** Gallery/Step sections: the gallery that holds their images — the `gallery_id` for image uploads. */
+  document_gallery_id?: number | null;
+  /** Gallery/Step sections: images in the gallery, as nested JSON:API resources (kebab-case attribute keys). */
+  document_images?: JsonApiResource[] | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/**
+ * An image uploaded INTO a document via POST /document_images. `target`
+ * decides placement: `{type: "document"}` yields an inline image whose
+ * `inline_resource_url` (a relative path) goes into section HTML as
+ * `<img src>`; `{type: "gallery"}` files it into a Gallery/Step gallery.
+ * The *_src URLs are presigned S3 links that expire after about an hour.
+ */
+export interface DocumentImage extends Record<string, unknown> {
+  id: string;
+  type: string;
+  name?: string;
+  size?: number;
+  document_id?: number | null;
+  document_gallery_id?: number | null;
+  target?: { type: "gallery" | "document"; id: number } | null;
+  original_src?: string | null;
+  slim_src?: string | null;
+  thumbnail_src?: string | null;
+  inline_resource_url?: string | null;
   created_at?: string;
   updated_at?: string;
 }

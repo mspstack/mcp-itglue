@@ -5,7 +5,7 @@ import type { ToolRegistrar } from "../auth/roles.js";
 import type { ITGlueClient } from "../itglue/client.js";
 import { buildQuery } from "../itglue/client.js";
 import type { DocumentSection } from "../itglue/types.js";
-import { clip, htmlToText, pageFooter, sectionKind } from "../format.js";
+import { clip, galleryImages, galleryLines, htmlToText, pageFooter, sectionKind } from "../format.js";
 import { queueDocumentRefresh, type IndexerDeps } from "../vector/indexer.js";
 import {
   emptyPageData,
@@ -23,7 +23,15 @@ import {
 } from "./shared.js";
 
 /** Summary fields for list items; content becomes a bounded content_preview. */
-const SECTION_SUMMARY_KEYS = ["id", "resource_type", "sort", "level", "duration", "updated_at"] as const;
+const SECTION_SUMMARY_KEYS = [
+  "id",
+  "resource_type",
+  "sort",
+  "level",
+  "duration",
+  "document_gallery_id",
+  "updated_at",
+] as const;
 const CONTENT_PREVIEW_CHARS = 300;
 
 function sectionSummaryData(section: DocumentSection): Record<string, unknown> {
@@ -33,7 +41,21 @@ function sectionSummaryData(section: DocumentSection): Record<string, unknown> {
     data.content_preview =
       plain.length > CONTENT_PREVIEW_CHARS ? `${plain.slice(0, CONTENT_PREVIEW_CHARS)}…` : plain;
   }
+  const images = galleryImages(section);
+  if (images.length > 0) data.images = images;
   return data;
+}
+
+/**
+ * Text/Step sections carry `content` (raw HTML, inline images as short relative
+ * paths — the form needed for editing) and `rendered_content` (the same HTML
+ * with ~1.5 KB presigned S3 URLs per image that expire within an hour). Output
+ * shows `content`: it is what a caller must round-trip, and it is compact.
+ */
+function sectionBody(section: DocumentSection): string[] {
+  const lines = [section.content ? htmlToText(section.content) : "*No content*"];
+  lines.push(...galleryLines(section));
+  return lines;
 }
 
 const SECTION_TYPES = ["Text", "Heading", "Gallery", "Step"] as const;
@@ -48,7 +70,7 @@ function sectionSummary(section: DocumentSection): string {
     `### ${sectionKind(section.resource_type)} (ID: ${section.id}, position: ${section.sort ?? "—"})`,
   ];
   if (section.level != null) lines.push(`**Level**: ${section.level}`);
-  lines.push(section.content ? htmlToText(section.content) : "*No content*");
+  lines.push(...sectionBody(section));
   if (section.duration != null) lines.push(`- **Duration**: ${section.duration} min`);
   if (section.updated_at) lines.push(`- **Updated**: ${section.updated_at}`);
   lines.push("");
@@ -67,7 +89,8 @@ export function registerDocumentSectionTools(
       description:
         "List the sections of a document in position order, with content previews and section IDs " +
         "(needed for update/delete operations). List items carry summary fields and a bounded " +
-        "content_preview; use itglue_get_document_section for full content.",
+        "content_preview; Gallery/Step items also carry document_gallery_id (the gallery_id for " +
+        "itglue_create_document_image) and their images. Use itglue_get_document_section for full content.",
       inputSchema: {
         document_id: z.number().int().positive().describe("The parent document ID"),
         page_number: pageNumberField,
@@ -113,7 +136,9 @@ export function registerDocumentSectionTools(
       name: "itglue_get_document_section",
       title: "Get IT Glue Document Section",
       description:
-        "Get one document section with its full content (HTML on the wire; markdown output converts to plain text).",
+        "Get one document section with its full content (HTML on the wire; markdown output converts to plain " +
+        "text). Inline images appear as <img src=\"/org/docs/doc/images/ID\"> relative paths — keep them verbatim " +
+        "when editing; the JSON record also has rendered_content with temporary S3 URLs for display.",
       inputSchema: {
         document_id: z.number().int().positive().describe("The parent document ID"),
         section_id: z.number().int().positive().describe("The section ID"),
@@ -137,7 +162,7 @@ export function registerDocumentSectionTools(
         ];
         if (section.level != null) lines.push(`**Level**: ${section.level}`);
         if (section.duration != null) lines.push(`**Duration**: ${section.duration} min`);
-        lines.push("", section.content ? htmlToText(section.content) : "*No content*");
+        lines.push("", ...sectionBody(section));
         return structured(clip(lines.join("\n")), { item: section });
       } catch (error) {
         return failure(error);
@@ -151,9 +176,11 @@ export function registerDocumentSectionTools(
       title: "Create IT Glue Document Section",
       description:
         "Add a section to a document. Types: Text (HTML content), Heading (content = heading text, level 1-6 required), " +
-        "Gallery (no content), Step (HTML content, optional duration in minutes). " +
-        "Text/Step HTML may include inline images via <img src=\"https://…\"> (rendering depends on IT Glue's " +
-        "sanitization); to attach an image file to the document instead, use itglue_create_attachment.",
+        "Gallery (no content — add pictures afterwards with itglue_create_document_image using the new section's " +
+        "document_gallery_id), Step (HTML content, optional duration in minutes). " +
+        "IMAGES: to show a picture in Text/Step HTML, first upload it with itglue_create_document_image and use the " +
+        "returned inline_resource_url verbatim as <img src=\"/org/docs/doc/images/ID\">. Public https:// image links " +
+        "also work; base64/data: URIs and S3 URLs are stripped by IT Glue. Attachments never render in the body.",
       inputSchema: {
         document_id: z.number().int().positive().describe("The parent document ID"),
         section_type: z.enum(SECTION_TYPES).describe("Section type"),
@@ -207,7 +234,10 @@ export function registerDocumentSectionTools(
       title: "Update IT Glue Document Section",
       description:
         "Update a section's content, heading level, duration, or position. Only provided fields change; " +
-        "the section type cannot be changed. Text/Step content may embed inline images via <img src=\"…\">.",
+        "the section type cannot be changed. content REPLACES the whole HTML — fetch the current content first " +
+        "and keep existing <img src=\"/org/docs/doc/images/ID\"> tags verbatim, or they are lost. To add a new " +
+        "picture, upload it with itglue_create_document_image (or its append_to_section_id shortcut) and embed the " +
+        "returned inline_resource_url; base64/data: URIs and S3 URLs are stripped by IT Glue.",
       inputSchema: {
         document_id: z.number().int().positive().describe("The parent document ID"),
         section_id: z.number().int().positive().describe("The section ID to update"),
