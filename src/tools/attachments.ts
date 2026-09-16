@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { ToolRegistrar } from "../auth/roles.js";
 import { buildQuery, type ITGlueClient } from "../itglue/client.js";
 import type { Transport } from "../config.js";
+import type { StagedSource } from "../uploads/store.js";
 import { clip, pageFooter } from "../format.js";
 import {
   binarySourceFields,
@@ -96,7 +97,8 @@ function attachmentSummary(a: Record<string, unknown>): string {
 export function registerAttachmentTools(
   reg: ToolRegistrar,
   client: ITGlueClient,
-  transport: Transport
+  transport: Transport,
+  staged: StagedSource | null = null
 ): void {
   reg.register(
     {
@@ -106,10 +108,11 @@ export function registerAttachmentTools(
         "Attach a file (PDF, image, config export, …) to a record (document, flexible asset, configuration, etc.). " +
         "The file appears in the record's Attachments side panel — it is NOT shown inside a document's body. " +
         "To place a picture inside a document (inline in a Text/Step section or in a Gallery), use " +
-        "itglue_create_document_image instead. Provide exactly one source: content_base64 (a base64 string, " +
-        "optionally a data: URI), url (the server fetches and encodes it), or file_path (local stdio runs only). " +
-        "Give file_name with an extension (e.g. network-diagram.pdf) so IT Glue detects the type; it is inferred " +
-        `from url/file_path when omitted. Max ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB.`,
+        "itglue_create_document_image instead. Provide exactly one source: content_base64 (small files only), " +
+        "url (the server fetches it), file_path (local stdio runs only), or upload_id (a file the client PUT via " +
+        "itglue_request_upload — use this for anything on the client's disk). Give file_name with an extension " +
+        "(e.g. network-diagram.pdf) so IT Glue detects the type; it is inferred from url/file_path/upload when " +
+        `omitted. Max ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB.`,
       inputSchema: {
         resource_type: z.enum(RESOURCE_TYPES).describe("The record type to attach to"),
         resource_id: z.number().int().positive().describe("The parent record ID"),
@@ -131,7 +134,7 @@ export function registerAttachmentTools(
       }
     ) => {
       try {
-        const { content, fileName } = await prepareUpload(args, transport);
+        const { content, fileName } = await prepareUpload(args, transport, staged);
 
         const attachment = await client.create<Record<string, unknown>>(
           attachmentsPath(args.resource_type, args.resource_id),

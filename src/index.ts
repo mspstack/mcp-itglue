@@ -7,6 +7,7 @@ import { loadTokenEntries } from "./auth/tokens.js";
 import { createServer, SERVER_NAME, SERVER_VERSION } from "./server.js";
 import { createApp } from "./http/app.js";
 import { embedderFromEnv } from "./vector/embeddings.js";
+import { createUploadStore } from "./uploads/index.js";
 
 const USAGE = `${SERVER_NAME} v${SERVER_VERSION}
 
@@ -27,6 +28,10 @@ Environment:
   CLIENT_ITGLUE_KEYS       disabled|with-token|open — client-supplied IT Glue keys (default: with-token)
   ALLOWED_ORIGINS          Extra browser origins allowed on /mcp (localhost always allowed)
   ITGLUE_WEBHOOK_SECRET    Secret for /webhook/itglue signatures and /index/refresh
+  UPLOAD_STAGING           off|memory|azure-blob — staged file uploads for upload_id (default: memory on http)
+  PUBLIC_BASE_URL          Reachable base URL for memory-mode upload URLs (default: http://localhost:PORT)
+  AZURE_STORAGE_CONNECTION_STRING | AZURE_STORAGE_ACCOUNT [+ AZURE_STORAGE_CONTAINER]
+                           azure-blob staging (SAS uploads) — for servers behind a gateway
   VECTOR_INDEX_PATH        Vector index file (default: ./vector-index.json)
   OPENAI_API_KEY | AZURE_OPENAI_API_KEY + AZURE_OPENAI_ENDPOINT
                            Enables semantic vector search
@@ -69,7 +74,20 @@ async function runStdio(config: ServerConfig): Promise<void> {
 
 async function runHttp(config: ServerConfig): Promise<void> {
   logStartupSummary(config);
-  const app = createApp(config);
+  const uploads = await createUploadStore(config);
+  if (!uploads) {
+    console.error("[uploads] Staged uploads disabled (UPLOAD_STAGING=off) — upload_id is not accepted.");
+  } else if (uploads.kind === "memory") {
+    console.error(`[uploads] Staged uploads in memory; clients PUT to ${config.publicBaseUrl}/upload/:id`);
+    if (config.publicBaseUrl.startsWith("http://localhost")) {
+      console.error("[uploads] PUBLIC_BASE_URL is not set — upload URLs point at localhost; set it for remote clients.");
+    }
+  } else {
+    console.error(
+      `[uploads] Staged uploads via Azure Blob container "${config.azureStorage?.container}" (${config.azureStorage?.connectionString ? "account key" : "DefaultAzureCredential"}).`
+    );
+  }
+  const app = createApp(config, { uploads });
   await new Promise<void>((resolve) => {
     app.listen(config.port, "0.0.0.0", () => resolve());
   });

@@ -21,6 +21,7 @@ import type { ToolRegistrar } from "../auth/roles.js";
 import type { ITGlueClient } from "../itglue/client.js";
 import type { DocumentImage, DocumentSection } from "../itglue/types.js";
 import type { Transport } from "../config.js";
+import type { StagedSource } from "../uploads/store.js";
 import { queueDocumentRefresh, type IndexerDeps } from "../vector/indexer.js";
 import {
   assertRenderableImage,
@@ -92,7 +93,8 @@ export function registerDocumentImageTools(
   reg: ToolRegistrar,
   client: ITGlueClient,
   transport: Transport,
-  refreshDeps: IndexerDeps | null
+  refreshDeps: IndexerDeps | null,
+  staged: StagedSource | null = null
 ): void {
   reg.register(
     {
@@ -106,10 +108,11 @@ export function registerDocumentImageTools(
         "itglue_update_document_section, or pass append_to_section_id to have this tool append the <img> to an " +
         "existing Text/Step section for you. (2) GALLERY — pass gallery_id (the document_gallery_id shown on a " +
         "Gallery or Step section) to file the image into that gallery. Never put base64/data: URIs or S3 URLs in " +
-        "section content; IT Glue strips them. Provide exactly one source: content_base64, url, or file_path " +
-        "(local stdio runs only). content_base64 must be the exact bytes of a real image file — never write or " +
-        "reconstruct base64 yourself (IT Glue rejects anything ImageMagick cannot decode); for a picture that " +
-        "exists on the web or disk prefer url or file_path so the server reads the bytes itself. file_name needs " +
+        "section content; IT Glue strips them. Provide exactly one source: upload_id (a file the client PUT via " +
+        "itglue_request_upload — the right choice for anything on the client's disk), url (the server fetches " +
+        "it), file_path (local stdio runs only), or content_base64 (tiny files only). content_base64 must be the " +
+        "exact bytes of a real image file — never write or reconstruct base64 yourself (IT Glue rejects anything " +
+        "ImageMagick cannot decode). file_name needs " +
         `an extension (e.g. screenshot.png); inferred from url/file_path when omitted. Max ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB.`,
       inputSchema: {
         document_id: z.number().int().positive().describe("The document the image belongs to"),
@@ -154,7 +157,7 @@ export function registerDocumentImageTools(
           );
         }
 
-        const { content, fileName, bytes, buffer } = await prepareUpload(args, transport);
+        const { content, fileName, bytes, buffer } = await prepareUpload(args, transport, staged);
         // Fail fast with a useful message instead of IT Glue's opaque
         // NotIdentifiedByImageMagickError (seen with truncated/synthesized base64).
         assertRenderableImage(buffer);

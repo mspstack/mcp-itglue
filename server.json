@@ -77,6 +77,38 @@
           "isRequired": false,
           "isSecret": false,
           "default": "./vector-index.json"
+        },
+        {
+          "name": "UPLOAD_STAGING",
+          "description": "Staged file uploads for upload_id: off, memory (PUT to this server's /upload/:id), or azure-blob (SAS upload to Azure Blob Storage). Default: memory on http, off on stdio",
+          "isRequired": false,
+          "isSecret": false,
+          "default": "memory"
+        },
+        {
+          "name": "PUBLIC_BASE_URL",
+          "description": "Externally reachable base URL of this server, used for memory-mode upload URLs",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "AZURE_STORAGE_CONNECTION_STRING",
+          "description": "azure-blob staging: storage account connection string (account-key SAS)",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "AZURE_STORAGE_ACCOUNT",
+          "description": "azure-blob staging via DefaultAzureCredential (managed identity) — alternative to the connection string",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "AZURE_STORAGE_CONTAINER",
+          "description": "Blob container for staged uploads",
+          "isRequired": false,
+          "isSecret": false,
+          "default": "mcp-itglue-uploads"
         }
       ]
     }

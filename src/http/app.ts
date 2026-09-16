@@ -5,6 +5,7 @@
  *   GET  /health            liveness probe
  *   POST /webhook/itglue    IT Glue webhook → incremental vector-index update
  *   POST /index/refresh     manual vector-index refresh (shared-secret protected)
+ *   PUT  /upload/:id        staged file upload (memory backend only; same auth as /mcp)
  *
  * Authentication model:
  *  - Role tokens (Authorization: Bearer …) map to viewer/editor/admin and gate
@@ -30,6 +31,27 @@ import { ITGlueClient } from "../itglue/client.js";
 import { normalizeWebhookBody, processWebhookEvent, verifyWebhookSignature } from "../webhook/handler.js";
 import { openIndex } from "../vector/store.js";
 import { refreshDocument, reindexAll } from "../vector/indexer.js";
+import { MAX_UPLOAD_BYTES } from "../tools/binary-input.js";
+import { UPLOAD_ID_PATTERN, type ReceiveOutcome, type UploadStore } from "../uploads/store.js";
+
+export interface AppDeps {
+  /** Staged-upload backend shared by all sessions (null = feature off). */
+  uploads?: UploadStore | null;
+}
+
+/** Identity string that staged uploads are bound to. Exported for tests. */
+export function principalFor(role: Role, label: string, keyHash: string | null): string {
+  return `${role}|${label}|${keyHash ?? ""}`;
+}
+
+const RECEIVE_STATUS: Record<ReceiveOutcome, [number, string]> = {
+  ok: [200, "stored"],
+  "not-found": [404, "Unknown upload_id — request a slot with itglue_request_upload first."],
+  forbidden: [403, "This upload slot belongs to a different principal."],
+  expired: [410, "This upload slot has expired (slots live 15 minutes) — request a new one."],
+  "too-large": [413, `File exceeds the ${MAX_UPLOAD_BYTES} byte limit or the server's staging capacity.`],
+  "already-uploaded": [409, "A file was already stored for this upload_id — request a new slot to replace it."],
+};
 
 interface SessionRecord {
   transport: StreamableHTTPServerTransport;
@@ -130,8 +152,9 @@ export function originAllowed(origin: string | undefined, allowedOrigins: string
   return allowedOrigins.includes(origin.replace(/\/+$/, ""));
 }
 
-export function createApp(config: ServerConfig): express.Express {
+export function createApp(config: ServerConfig, deps: AppDeps = {}): express.Express {
   const app = express();
+  const uploads = deps.uploads ?? null;
   app.use(
     express.json({
       limit: "5mb",
@@ -199,11 +222,16 @@ export function createApp(config: ServerConfig): express.Express {
         if (transport.sessionId) sessions.delete(transport.sessionId);
       };
 
-      const server = createServer(config, {
-        role: auth.role,
-        label: auth.label,
-        apiKey: auth.apiKey,
-      });
+      const server = createServer(
+        config,
+        {
+          role: auth.role,
+          label: auth.label,
+          apiKey: auth.apiKey,
+          principal: principalFor(auth.role, auth.label, auth.keyHash),
+        },
+        { uploads }
+      );
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
     })().catch((err) => {
@@ -232,6 +260,46 @@ export function createApp(config: ServerConfig): express.Express {
 
   app.get("/mcp", handleSessionRequest);
   app.delete("/mcp", handleSessionRequest);
+
+  // ── Staged uploads (memory backend) ──────────────────────────
+  // The client PUTs raw bytes to the URL from itglue_request_upload, with the
+  // same credentials it uses for /mcp. The slot must belong to that principal.
+
+  if (uploads?.kind === "memory" && uploads.receive) {
+    const receive = uploads.receive.bind(uploads);
+    app.put(
+      "/upload/:id",
+      express.raw({ type: () => true, limit: MAX_UPLOAD_BYTES + 4096 }),
+      (req: Request, res: Response) => {
+        void (async () => {
+          const auth = resolveAuth(req, config);
+          if (!auth.ok) return res.status(auth.status).json({ error: auth.message });
+          const id = String(req.params.id ?? "");
+          if (!UPLOAD_ID_PATTERN.test(id)) return res.status(404).json({ error: RECEIVE_STATUS["not-found"][1] });
+          const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+          if (body.length === 0) return res.status(400).json({ error: "Empty body — send the file bytes as the request body." });
+          const fileName = headerValue(req, "x-file-name");
+          const outcome = await receive(principalFor(auth.role, auth.label, auth.keyHash), id, body, fileName);
+          const [status, message] = RECEIVE_STATUS[outcome];
+          if (outcome === "ok") {
+            console.error(`[uploads] ${auth.label} staged ${body.length} bytes as ${id}`);
+            return res.status(status).json({ upload_id: id, bytes: body.length, status: message });
+          }
+          res.status(status).json({ error: message });
+        })().catch((err) => {
+          console.error(`[http] PUT /upload failed: ${String(err)}`);
+          if (!res.headersSent) res.status(500).json({ error: "Internal server error" });
+        });
+      }
+    );
+    // express.raw rejects oversized bodies before the handler runs — answer in JSON.
+    app.use("/upload", (err: { type?: string; status?: number }, _req: Request, res: Response, next: express.NextFunction) => {
+      if (err?.type === "entity.too.large") {
+        return res.status(413).json({ error: RECEIVE_STATUS["too-large"][1] });
+      }
+      next(err);
+    });
+  }
 
   // ── Vector-index freshness endpoints ─────────────────────────
   // Both use the server-wide IT Glue key; client keys never flow here.

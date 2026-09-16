@@ -7,6 +7,7 @@ import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { z } from "zod";
 import type { Transport } from "../config.js";
+import type { StagedSource } from "../uploads/store.js";
 
 /** Reject files large enough to bloat the JSON payload / API limits. */
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
@@ -17,6 +18,7 @@ export type BinarySourceArgs = {
   content_base64?: string;
   url?: string;
   file_path?: string;
+  upload_id?: string;
 };
 
 /** Zod fields shared by every upload tool — exactly one source must be given. */
@@ -24,12 +26,18 @@ export const binarySourceFields = {
   content_base64: z
     .string()
     .optional()
-    .describe("Base64-encoded file bytes (a leading data: URI prefix is stripped)"),
+    .describe("Base64-encoded file bytes (a leading data: URI prefix is stripped) — small files only"),
   url: z.string().optional().describe("URL the server fetches and base64-encodes"),
   file_path: z
     .string()
     .optional()
     .describe("Local filesystem path to read (stdio transport only)"),
+  upload_id: z
+    .string()
+    .optional()
+    .describe(
+      "ID from itglue_request_upload after the client has PUT the file to the returned URL — the server reads the bytes itself"
+    ),
 };
 
 /**
@@ -44,27 +52,54 @@ export function decodeBase64Input(input: string): Buffer {
 
 /**
  * Resolve the caller's chosen source to raw bytes plus an inferred file name.
- * Exactly one of content_base64 / url / file_path must be provided; file_path
- * is only honoured on the local stdio transport.
+ * Exactly one of content_base64 / url / file_path / upload_id must be
+ * provided; file_path is only honoured on the local stdio transport and
+ * upload_id only when the server has a staging backend.
  */
 export async function resolveBytes(
   args: BinarySourceArgs,
-  transport: Transport
+  transport: Transport,
+  staged: StagedSource | null = null
 ): Promise<{ buffer: Buffer; inferredName?: string }> {
-  const sources = [args.content_base64, args.url, args.file_path].filter((v) => v !== undefined);
+  const sources = [args.content_base64, args.url, args.file_path, args.upload_id].filter(
+    (v) => v !== undefined
+  );
   if (sources.length === 0) {
     throw new UploadInputError(
-      "Provide exactly one image source: content_base64, url, or file_path."
+      "Provide exactly one image source: content_base64, url, file_path, or upload_id."
     );
   }
   if (sources.length > 1) {
     throw new UploadInputError(
-      "Provide only one image source (content_base64, url, or file_path), not several."
+      "Provide only one image source (content_base64, url, file_path, or upload_id), not several."
     );
   }
 
   if (args.content_base64 !== undefined) {
     return { buffer: decodeBase64Input(args.content_base64) };
+  }
+
+  if (args.upload_id !== undefined) {
+    if (!staged) {
+      throw new UploadInputError(
+        "Staged uploads are not enabled on this server (UPLOAD_STAGING=off), so upload_id cannot be used — " +
+          "pass url or content_base64 instead."
+      );
+    }
+    const result = await staged.take(args.upload_id);
+    if (result.status === "pending") {
+      throw new UploadInputError(
+        `No bytes have been received for upload_id ${args.upload_id} yet — PUT the file to the URL from ` +
+          "itglue_request_upload first, then call this tool again."
+      );
+    }
+    if (result.status === "missing") {
+      throw new UploadInputError(
+        `upload_id ${args.upload_id} is unknown, expired (tickets live 15 minutes), already used, or belongs ` +
+          "to another session. Request a new one with itglue_request_upload and PUT the file again."
+      );
+    }
+    return { buffer: result.upload.buffer, inferredName: result.upload.fileName };
   }
 
   if (args.url !== undefined) {
@@ -170,9 +205,10 @@ export function assertRenderableImage(buf: Buffer): ImageSniff {
  */
 export async function prepareUpload(
   args: BinarySourceArgs & { file_name?: string },
-  transport: Transport
+  transport: Transport,
+  staged: StagedSource | null = null
 ): Promise<{ content: string; fileName: string; bytes: number; buffer: Buffer }> {
-  const { buffer, inferredName } = await resolveBytes(args, transport);
+  const { buffer, inferredName } = await resolveBytes(args, transport, staged);
 
   if (buffer.length === 0) {
     throw new UploadInputError("The image source produced no data.");

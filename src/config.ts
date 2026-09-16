@@ -21,6 +21,20 @@
  *                         itglue_find_endpoint) — also via the --advanced flag.
  *                         Off by default; the tools are an escape hatch for
  *                         API surface the curated tools don't wrap.
+ *   UPLOAD_STAGING        off | memory | azure-blob — how clients hand real files to
+ *                         itglue_create_document_image / itglue_create_attachment
+ *                         without pushing base64 through the model (default:
+ *                         memory on http, off on stdio where file_path works).
+ *                         memory: clients PUT to this server's /upload/:id.
+ *                         azure-blob: clients PUT to a short-lived SAS URL.
+ *   PUBLIC_BASE_URL       Externally reachable base URL of this server, used to
+ *                         build memory-mode upload URLs (default: http://localhost:PORT)
+ *   AZURE_STORAGE_CONNECTION_STRING
+ *                         azure-blob staging with an account key (SAS signed locally)
+ *   AZURE_STORAGE_ACCOUNT azure-blob staging via DefaultAzureCredential (managed
+ *                         identity / az login) — user-delegation SAS
+ *   AZURE_STORAGE_CONTAINER
+ *                         Blob container for staged uploads (default: mcp-itglue-uploads)
  *   ITGLUE_WEBHOOK_SECRET Shared secret for /webhook/itglue (HMAC) and /index/refresh
  *   VECTOR_INDEX_PATH     Path of the persisted vector index (default: ./vector-index.json)
  *   OPENAI_API_KEY        Enables vector search (OpenAI embeddings)
@@ -41,6 +55,15 @@ export type ClientKeyMode = "disabled" | "with-token" | "open";
 
 const CLIENT_KEY_MODES: ClientKeyMode[] = ["disabled", "with-token", "open"];
 
+export type UploadStagingMode = "off" | "memory" | "azure-blob";
+const UPLOAD_STAGING_MODES: UploadStagingMode[] = ["off", "memory", "azure-blob"];
+
+export interface AzureStorageConfig {
+  account?: string;
+  container: string;
+  connectionString?: string;
+}
+
 export interface ServerConfig {
   transport: Transport;
   port: number;
@@ -54,6 +77,12 @@ export interface ServerConfig {
   advancedToolset: boolean;
   webhookSecret: string | undefined;
   vectorIndexPath: string;
+  /** Staged-upload backend (see UPLOAD_STAGING). */
+  uploadStaging: UploadStagingMode;
+  /** Externally reachable base URL, for memory-mode upload tickets. */
+  publicBaseUrl: string;
+  /** Present when uploadStaging === "azure-blob". */
+  azureStorage: AzureStorageConfig | undefined;
 }
 
 export class ConfigError extends Error {}
@@ -138,6 +167,35 @@ export function loadConfig(
   const advancedEnv = (cleanEnv(env, "ITGLUE_ADVANCED_TOOLSET") || "").toLowerCase();
   const advancedToolset = argv.includes("--advanced") || advancedEnv === "true" || advancedEnv === "1";
 
+  const uploadStaging = (cleanEnv(env, "UPLOAD_STAGING") ||
+    (transport === "http" ? "memory" : "off")) as UploadStagingMode;
+  if (!UPLOAD_STAGING_MODES.includes(uploadStaging)) {
+    throw new ConfigError(
+      `Invalid UPLOAD_STAGING "${uploadStaging}" — expected one of: ${UPLOAD_STAGING_MODES.join(", ")}`
+    );
+  }
+  const publicBaseUrl = (cleanEnv(env, "PUBLIC_BASE_URL") || `http://localhost:${port}`).replace(/\/+$/, "");
+  try {
+    new URL(publicBaseUrl);
+  } catch {
+    throw new ConfigError(`Invalid PUBLIC_BASE_URL "${publicBaseUrl}" — expected e.g. https://mcp.example.com`);
+  }
+  let azureStorage: AzureStorageConfig | undefined;
+  if (uploadStaging === "azure-blob") {
+    const connectionString = cleanEnv(env, "AZURE_STORAGE_CONNECTION_STRING");
+    const account = cleanEnv(env, "AZURE_STORAGE_ACCOUNT");
+    if (!connectionString && !account) {
+      throw new ConfigError(
+        "UPLOAD_STAGING=azure-blob needs AZURE_STORAGE_CONNECTION_STRING or AZURE_STORAGE_ACCOUNT (+ an Azure identity)"
+      );
+    }
+    azureStorage = {
+      account,
+      connectionString,
+      container: cleanEnv(env, "AZURE_STORAGE_CONTAINER") || "mcp-itglue-uploads",
+    };
+  }
+
   return {
     transport,
     port,
@@ -148,5 +206,8 @@ export function loadConfig(
     advancedToolset,
     webhookSecret: cleanEnv(env, "ITGLUE_WEBHOOK_SECRET"),
     vectorIndexPath: cleanEnv(env, "VECTOR_INDEX_PATH") || "./vector-index.json",
+    uploadStaging,
+    publicBaseUrl,
+    azureStorage,
   };
 }

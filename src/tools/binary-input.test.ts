@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertRenderableImage, sniffImage } from "./binary-input.js";
+import { assertRenderableImage, resolveBytes, sniffImage } from "./binary-input.js";
 
 /** Smallest valid PNG (1×1, from the IT Glue API docs example). */
 const PNG_1X1 = Buffer.from(
@@ -71,5 +71,34 @@ describe("assertRenderableImage", () => {
 
   it("rejects non-image bytes with guidance to use url/file_path", () => {
     expect(() => assertRenderableImage(Buffer.from("not an image"))).toThrow(/not a recognizable image/);
+  });
+});
+
+describe("resolveBytes with upload_id", () => {
+
+  it("hands back the staged bytes and file name", async () => {
+    const staged = {
+      take: async (id: string) =>
+        id === "abc"
+          ? ({ status: "ok", upload: { buffer: Buffer.from("bytes"), fileName: "staged.png" } } as const)
+          : ({ status: "missing" } as const),
+    };
+    const out = await resolveBytes({ upload_id: "abc" }, "http", staged);
+    expect(out.buffer.toString()).toBe("bytes");
+    expect(out.inferredName).toBe("staged.png");
+  });
+
+  it("explains pending, missing, and disabled staging", async () => {
+    const pending = { take: async () => ({ status: "pending" } as const) };
+    await expect(resolveBytes({ upload_id: "x" }, "http", pending)).rejects.toThrow(/No bytes have been received/);
+    const missing = { take: async () => ({ status: "missing" } as const) };
+    await expect(resolveBytes({ upload_id: "x" }, "http", missing)).rejects.toThrow(/unknown, expired/);
+    await expect(resolveBytes({ upload_id: "x" }, "http", null)).rejects.toThrow(/not enabled on this server/);
+  });
+
+  it("counts upload_id as one of the mutually exclusive sources", async () => {
+    await expect(resolveBytes({ upload_id: "x", url: "https://a/b.png" }, "http", null)).rejects.toThrow(
+      /only one image source/
+    );
   });
 });

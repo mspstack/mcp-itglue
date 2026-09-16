@@ -103,6 +103,7 @@ Endpoints:
 | `GET /health` | Liveness probe |
 | `POST /webhook/itglue` | IT Glue webhook → incremental index update |
 | `POST /index/refresh` | Manual index refresh (shared secret or admin token) |
+| `PUT /upload/:id` | Staged file upload slot (memory backend; same auth as `/mcp`) |
 
 > Sessions are held in memory — run a single instance (or add sticky sessions) behind your load balancer.
 
@@ -154,6 +155,7 @@ With BYOK enabled the server-wide `ITGLUE_API_KEY` becomes optional: sessions wi
 | `itglue_delete_document_section` † | write |
 | `itglue_create_document_image` | write |
 | `itglue_delete_document_image` † | write |
+| `itglue_request_upload` (HTTP, when `UPLOAD_STAGING` ≠ off) | write |
 | `itglue_create_flexible_asset`, `itglue_update_flexible_asset` | write |
 | `itglue_create_attachment` | write |
 | `itglue_build_vector_index` | write |
@@ -173,6 +175,24 @@ IT Glue has two unrelated upload paths. **Attachments** (`itglue_create_attachme
 2. For inline images, put the returned `inline_resource_url` verbatim into the section HTML: `<img src="/6255696/docs/17772862/images/27211966">` — or pass `append_to_section_id` and the tool appends it to an existing Text/Step section for you.
 
 IT Glue strips `data:` URIs and its own S3 URLs from section content; only these relative paths (and public `https://` links) survive.
+
+### Getting a file from the client to the server (staged uploads)
+
+Tool arguments travel through the model, so `content_base64` only works for tiny files — a screenshot is megabytes of base64 the model would have to reproduce token by token (and IT Glue rejects the truncated result with `NotIdentifiedByImageMagickError`). Over HTTP the server therefore offers **staged uploads**:
+
+1. The model calls `itglue_request_upload` (`file_name` optional) and gets an `upload_id`, a URL, and a ready-to-run `curl`.
+2. The client PUTs the file to that URL from a shell.
+3. The model calls `itglue_create_document_image` or `itglue_create_attachment` with `upload_id`.
+
+Slots live 15 minutes, are bound to the requesting principal (token label / BYOK key), and are consumed once. Two backends, chosen with `UPLOAD_STAGING`:
+
+| Mode | Where the PUT goes | When to use |
+|---|---|---|
+| `memory` (default on HTTP) | This server's `PUT /upload/:id`, with the same `Authorization` / `x-itglue-api-key` headers as `/mcp`. Set `PUBLIC_BASE_URL` so the URL is reachable. | The server is directly reachable by clients. |
+| `azure-blob` | A short-lived SAS URL on Azure Blob Storage; the server later downloads the blob with its own credentials and deletes it. | The server sits behind a gateway or is otherwise not reachable from clients. Configure `AZURE_STORAGE_CONNECTION_STRING` (account-key SAS) **or** `AZURE_STORAGE_ACCOUNT` (managed identity / `az login` via `DefaultAzureCredential`, needs *Storage Blob Data Contributor* + *Storage Blob Delegator*), plus optional `AZURE_STORAGE_CONTAINER` (default `mcp-itglue-uploads`). |
+| `off` | — | stdio (default there — `file_path` reads the local disk directly) or when you don't want the feature. |
+
+`url` remains the simplest source for anything already hosted on the web.
 ‡ Advanced toolset (opt-in, off by default): `itglue_get` is a read-only GET passthrough for any API path the curated tools don't wrap, and `itglue_find_endpoint` searches a curated endpoint catalog. Enable with `ITGLUE_ADVANCED_TOOLSET=true` or `--advanced`. Password resources (`/passwords`) are hard-blocked — credential values never reach the model.
 
 Vector tools appear only when an embedding provider is configured.
