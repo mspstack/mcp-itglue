@@ -92,15 +92,86 @@ export async function resolveBytes(
   return { buffer, inferredName: basename(args.file_path!) };
 }
 
+export interface ImageSniff {
+  mime: string;
+  /** False when the container's end-of-image marker is missing — the data was cut off. */
+  complete: boolean;
+}
+
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/**
+ * Identify an image by its magic bytes and check that its trailer is present.
+ * IT Glue runs uploads through ImageMagick and rejects anything it cannot
+ * identify (`Paperclip::Errors::NotIdentifiedByImageMagickError`) — in
+ * practice that is base64 an assistant synthesized or a real file whose
+ * base64 got truncated in transit. Catching it here yields a message that
+ * says what actually went wrong. Returns null for non-image data.
+ */
+export function sniffImage(buf: Buffer): ImageSniff | null {
+  if (buf.length >= 8 && buf.subarray(0, 8).equals(PNG_SIGNATURE)) {
+    // A PNG ends with the IEND chunk: length(4) "IEND" crc(4).
+    const complete = buf.length >= 16 && buf.subarray(-8, -4).toString("latin1") === "IEND";
+    return { mime: "image/png", complete };
+  }
+  if (buf.length >= 4 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+    const complete = buf[buf.length - 2] === 0xff && buf[buf.length - 1] === 0xd9;
+    return { mime: "image/jpeg", complete };
+  }
+  const head6 = buf.subarray(0, 6).toString("latin1");
+  if (head6 === "GIF87a" || head6 === "GIF89a") {
+    return { mime: "image/gif", complete: buf[buf.length - 1] === 0x3b };
+  }
+  if (buf.length >= 12 && buf.subarray(0, 4).toString("latin1") === "RIFF" && buf.subarray(8, 12).toString("latin1") === "WEBP") {
+    // RIFF carries its own length: header(8) + declared size.
+    return { mime: "image/webp", complete: buf.length >= buf.readUInt32LE(4) + 8 };
+  }
+  if (buf.subarray(0, 2).toString("latin1") === "BM") return { mime: "image/bmp", complete: true };
+  const head4 = buf.subarray(0, 4).toString("latin1");
+  if (head4 === "II*\0" || head4 === "MM\0*") return { mime: "image/tiff", complete: true };
+  const text = buf.subarray(0, 512).toString("utf8").replace(/^﻿/, "").trimStart();
+  if (text.startsWith("<svg") || (text.startsWith("<?xml") && text.includes("<svg"))) {
+    return { mime: "image/svg+xml", complete: buf.toString("utf8").includes("</svg>") };
+  }
+  return null;
+}
+
+/**
+ * Throw a descriptive UploadInputError unless `buf` is a complete image of a
+ * type IT Glue can render. Used by the document-image tools (attachments may
+ * legitimately be PDFs, configs, etc., so they skip this).
+ */
+export function assertRenderableImage(buf: Buffer): ImageSniff {
+  const sniff = sniffImage(buf);
+  if (!sniff) {
+    throw new UploadInputError(
+      "The data is not a recognizable image (expected PNG, JPEG, GIF, WebP, BMP, TIFF or SVG). " +
+        "IT Glue would reject it as NotIdentifiedByImageMagick. If content_base64 was written or " +
+        "reconstructed by the assistant rather than copied from a real file, it is not a real image — " +
+        "pass a url IT Glue's server can fetch, or file_path on a local stdio run."
+    );
+  }
+  if (!sniff.complete) {
+    throw new UploadInputError(
+      `The ${sniff.mime} data is truncated — the file header is valid but the end-of-image marker is ` +
+        "missing, so the base64 was cut off in transit (long tool arguments often are). IT Glue would " +
+        "reject it as NotIdentifiedByImageMagick. Re-send the complete file, or use url / file_path " +
+        "so the server reads the bytes itself."
+    );
+  }
+  return sniff;
+}
+
 /**
  * Resolve, size-check, and name an upload in one step. Returns the base64
  * payload IT Glue expects plus the final file name (which must carry an
- * extension so IT Glue can detect the content type).
+ * extension so IT Glue can detect the content type) and the raw bytes for
+ * further validation.
  */
 export async function prepareUpload(
   args: BinarySourceArgs & { file_name?: string },
   transport: Transport
-): Promise<{ content: string; fileName: string; bytes: number }> {
+): Promise<{ content: string; fileName: string; bytes: number; buffer: Buffer }> {
   const { buffer, inferredName } = await resolveBytes(args, transport);
 
   if (buffer.length === 0) {
@@ -119,5 +190,5 @@ export async function prepareUpload(
     );
   }
 
-  return { content: buffer.toString("base64"), fileName, bytes: buffer.length };
+  return { content: buffer.toString("base64"), fileName, bytes: buffer.length, buffer };
 }

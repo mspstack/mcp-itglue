@@ -12,6 +12,10 @@ import {
   registerDocumentImageTools,
 } from "./document-images.js";
 
+/** Smallest valid PNG (1×1) — uploads are validated as real images before hitting IT Glue. */
+const PNG_1X1 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
 describe("documentImageAttributes → toResourcePayload", () => {
   it("matches the documented POST /document_images body for an inline image", () => {
     const payload = toResourcePayload(
@@ -94,14 +98,14 @@ describe("itglue_create_document_image", () => {
     const result = await tools.get("itglue_create_document_image")!({
       document_id: 17772862,
       file_name: "shot.png",
-      content_base64: "SGVsbG8=",
+      content_base64: PNG_1X1,
       response_format: "markdown",
     });
 
     expect(result.isError).toBeUndefined();
     expect(create).toHaveBeenCalledWith(DOCUMENT_IMAGES_PATH, "document-images", {
       target: { type: "document", id: 17772862 },
-      image: { content: "SGVsbG8=", "file-name": "shot.png" },
+      image: { content: PNG_1X1, "file-name": "shot.png" },
     });
     expect(result.content[0]?.text).toContain("27211966");
     expect(result.content[0]?.text).toContain('<img src="/6255696/docs/17772862/images/27211966">');
@@ -115,7 +119,7 @@ describe("itglue_create_document_image", () => {
       document_id: 42,
       gallery_id: 12,
       file_name: "g.jpg",
-      content_base64: "SGVsbG8=",
+      content_base64: PNG_1X1,
       response_format: "markdown",
     });
 
@@ -134,7 +138,7 @@ describe("itglue_create_document_image", () => {
       document_id: 17772862,
       append_to_section_id: 31809245,
       file_name: "shot.png",
-      content_base64: "SGVsbG8=",
+      content_base64: PNG_1X1,
       response_format: "markdown",
     });
 
@@ -159,7 +163,7 @@ describe("itglue_create_document_image", () => {
       gallery_id: 2,
       append_to_section_id: 3,
       file_name: "x.png",
-      content_base64: "SGVsbG8=",
+      content_base64: PNG_1X1,
       response_format: "markdown",
     });
 
@@ -223,5 +227,43 @@ describe("itglue_get_document_image / itglue_delete_document_image", () => {
     const editor = setup("editor").tools;
     expect(editor.has("itglue_create_document_image")).toBe(true);
     expect(editor.has("itglue_delete_document_image")).toBe(true);
+  });
+});
+
+describe("itglue_create_document_image — image validation", () => {
+  it("rejects truncated base64 before calling IT Glue, naming the cause", async () => {
+    const create = vi.fn();
+    const { tools } = setup("admin", { create } as Partial<ITGlueClient>);
+
+    const result = await tools.get("itglue_create_document_image")!({
+      document_id: 25040194,
+      file_name: "routing-diagram.png",
+      // Valid PNG header (1100×321) with the body missing — what a colleague's
+      // failed upload looked like; IT Glue answered NotIdentifiedByImageMagickError.
+      content_base64:
+        "iVBORw0KGgoAAAANSUhEUgAABEwAAAFBCAMAAABaecrxAAAARVBMVEX////+/Pz58fH139/s2dbW09LPnJutameHQjyaJyfBdnXR",
+      response_format: "markdown",
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toMatch(/truncated/i);
+    expect(result.content[0]?.text).toMatch(/NotIdentifiedByImageMagick/);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-image bytes before calling IT Glue", async () => {
+    const create = vi.fn();
+    const { tools } = setup("admin", { create } as Partial<ITGlueClient>);
+
+    const result = await tools.get("itglue_create_document_image")!({
+      document_id: 1,
+      file_name: "x.png",
+      content_base64: Buffer.from("just some text").toString("base64"),
+      response_format: "markdown",
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toMatch(/not a recognizable image/i);
+    expect(create).not.toHaveBeenCalled();
   });
 });
