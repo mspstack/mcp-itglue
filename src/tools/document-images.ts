@@ -23,6 +23,7 @@ import type { DocumentImage, DocumentSection } from "../itglue/types.js";
 import type { Transport } from "../config.js";
 import { queueDocumentRefresh, type IndexerDeps } from "../vector/indexer.js";
 import {
+  assertRenderableImage,
   binarySourceFields,
   MAX_UPLOAD_BYTES,
   prepareUpload,
@@ -106,8 +107,10 @@ export function registerDocumentImageTools(
         "existing Text/Step section for you. (2) GALLERY — pass gallery_id (the document_gallery_id shown on a " +
         "Gallery or Step section) to file the image into that gallery. Never put base64/data: URIs or S3 URLs in " +
         "section content; IT Glue strips them. Provide exactly one source: content_base64, url, or file_path " +
-        "(local stdio runs only). file_name needs an extension (e.g. screenshot.png); inferred from url/file_path " +
-        `when omitted. Max ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB.`,
+        "(local stdio runs only). content_base64 must be the exact bytes of a real image file — never write or " +
+        "reconstruct base64 yourself (IT Glue rejects anything ImageMagick cannot decode); for a picture that " +
+        "exists on the web or disk prefer url or file_path so the server reads the bytes itself. file_name needs " +
+        `an extension (e.g. screenshot.png); inferred from url/file_path when omitted. Max ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB.`,
       inputSchema: {
         document_id: z.number().int().positive().describe("The document the image belongs to"),
         gallery_id: z
@@ -151,7 +154,10 @@ export function registerDocumentImageTools(
           );
         }
 
-        const { content, fileName, bytes } = await prepareUpload(args, transport);
+        const { content, fileName, bytes, buffer } = await prepareUpload(args, transport);
+        // Fail fast with a useful message instead of IT Glue's opaque
+        // NotIdentifiedByImageMagickError (seen with truncated/synthesized base64).
+        assertRenderableImage(buffer);
         const target: ImageTarget =
           args.gallery_id !== undefined
             ? { type: "gallery", id: args.gallery_id }
