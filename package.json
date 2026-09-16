@@ -49,6 +49,8 @@
     "url": "https://github.com/mspstack/mcp-itglue/issues"
   },
   "dependencies": {
+    "@azure/identity": "^4.13.3",
+    "@azure/storage-blob": "^12.33.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "express": "^5.2.1",
     "openai": "^6.45.0",

@@ -21,6 +21,8 @@ import { registerDocumentImageTools } from "./tools/document-images.js";
 import { registerFlexibleAssetTools } from "./tools/flexible-assets.js";
 import { registerVectorSearchTools } from "./tools/vector-search.js";
 import { registerAdvancedTools } from "./tools/advanced.js";
+import { registerUploadTools } from "./tools/uploads.js";
+import { bindUploads, type UploadStore } from "./uploads/store.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../package.json") as { name: string; version: string };
@@ -32,6 +34,13 @@ export interface SessionIdentity {
   role: Role;
   label: string;
   apiKey: string;
+  /** Stable identity string for binding staged uploads (defaults to the label). */
+  principal?: string;
+}
+
+export interface ServerExtras {
+  /** Staged-upload backend; null/undefined disables itglue_request_upload and the upload_id source. */
+  uploads?: UploadStore | null;
 }
 
 const INSTRUCTIONS = `# IT Glue MCP server
@@ -52,9 +61,10 @@ const INSTRUCTIONS = `# IT Glue MCP server
 - Get the type's field list with itglue_get_flexible_asset_type before creating/updating.
 - Updates REPLACE the whole traits object — send all traits back.
 
-## Attachments & images
-- Attach an image/file to any record (document, flexible asset, configuration, …) with itglue_create_attachment — pass content_base64, a url, or a local file_path (stdio only) plus a file_name.
-- For images inside a document's body, put <img src="…"> HTML in a Text section (itglue_create_document_section).
+## Images & attachments
+- A picture INSIDE a document: itglue_create_document_image (inline → embed the returned inline_resource_url as <img src>, or pass append_to_section_id; gallery → gallery_id). Attachments never render in the body.
+- A file in a record's Attachments panel: itglue_create_attachment.
+- Getting the bytes in: for a file on the client's machine call itglue_request_upload, have the client PUT the file to the returned URL (curl), then pass upload_id. Use url for web-hosted files. Never type base64 by hand — content_base64 is for tiny files you already hold verbatim.
 
 ## Notes
 - Delete operations are permanent.
@@ -70,7 +80,11 @@ export function indexerDepsFor(
   return { client, embedder, index: openIndex(config.vectorIndexPath) };
 }
 
-export function createServer(config: ServerConfig, session: SessionIdentity): McpServer {
+export function createServer(
+  config: ServerConfig,
+  session: SessionIdentity,
+  extras: ServerExtras = {}
+): McpServer {
   const client = new ITGlueClient({ apiKey: session.apiKey, baseUrl: config.baseUrl });
   const server = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
@@ -79,12 +93,16 @@ export function createServer(config: ServerConfig, session: SessionIdentity): Mc
 
   const reg = new ToolRegistrar(server, session.role);
   const vectorDeps = indexerDepsFor(config, client);
+  const principal = session.principal ?? session.label;
+  const uploads = extras.uploads ?? null;
+  const staged = uploads ? bindUploads(uploads, principal) : null;
 
   registerOrganizationTools(reg, client);
   registerDocumentTools(reg, client, vectorDeps);
   registerDocumentSectionTools(reg, client, vectorDeps);
-  registerDocumentImageTools(reg, client, config.transport, vectorDeps);
-  registerAttachmentTools(reg, client, config.transport);
+  registerDocumentImageTools(reg, client, config.transport, vectorDeps, staged);
+  registerAttachmentTools(reg, client, config.transport, staged);
+  if (uploads) registerUploadTools(reg, uploads, principal);
   registerFlexibleAssetTools(reg, client);
   if (vectorDeps) {
     registerVectorSearchTools(reg, vectorDeps);

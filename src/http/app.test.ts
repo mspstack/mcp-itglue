@@ -15,6 +15,10 @@ function makeConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
     allowedOrigins: [],
     webhookSecret: undefined,
     vectorIndexPath: "./vector-index.json",
+    advancedToolset: false,
+    uploadStaging: "off",
+    publicBaseUrl: "http://localhost:3000",
+    azureStorage: undefined,
     ...overrides,
   };
 }
